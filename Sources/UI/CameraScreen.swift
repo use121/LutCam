@@ -227,32 +227,41 @@ struct CameraScreen: View {
         }
     }
 
-    /// 设备给的范围可能退化（min == max 或非有限），直接喂给 Slider 会算出 NaN 导致崩溃
+    /// 曝光补偿范围。
+    ///
+    /// 设备报的是 ±8 EV，那是传感器极限，拉满会直接全白/全黑。
+    /// 这里统一收到 ±2 EV，和原生相机的滑条手感一致。
     private var safeExposureRange: ClosedRange<Double> {
-        let low = Double(controller.exposureRange.lowerBound)
-        let high = Double(controller.exposureRange.upperBound)
-        guard low.isFinite, high.isFinite, high - low > 0.2 else { return -2...2 }
+        let deviceLow = Double(controller.exposureRange.lowerBound)
+        let deviceHigh = Double(controller.exposureRange.upperBound)
+        let low = max(deviceLow.isFinite ? deviceLow : -2, -2)
+        let high = min(deviceHigh.isFinite ? deviceHigh : 2, 2)
+        guard high - low > 0.2 else { return -2...2 }
         return low...high
     }
 
     /// 收起 / 展开底部选项（原图、滤镜条、镜头档位）
+    ///
+    /// 注意：必须用官方 `.buttonStyle(.glass)`。
+    /// 手动给 Button 贴 `.glassEffect` 会吞掉点击，表现为「点很多次没反应」。
     private var collapseToggle: some View {
         Button {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                 chromeCollapsed.toggle()
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: chromeCollapsed ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                Text(chromeCollapsed ? "展开" : "收起")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .font(.system(size: 11, weight: .bold))
+                Text(chromeCollapsed ? "展开选项" : "收起选项")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
             }
-            .foregroundStyle(.white.opacity(0.7))
-            .frame(width: 54, height: 24)
+            .foregroundStyle(.white.opacity(0.85))
+            .frame(width: 104, height: 36)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular, in: .capsule)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .id("collapse-\(chromeCollapsed)")
     }
 

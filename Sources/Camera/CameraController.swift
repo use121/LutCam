@@ -335,10 +335,12 @@ final class CameraController: NSObject {
 
             let low = device.minExposureTargetBias
             let high = device.maxExposureTargetBias
+            // 统一限制在 ±2 EV：设备的 ±8 是传感器极限，拉满会全白/全黑
+            let wanted = max(-2, min(value, 2))
 
             var accepted = false
             if low.isFinite, high.isFinite, high - low > 0.1 {
-                let clamped = min(max(value, low), high)
+                let clamped = min(max(wanted, low), high)
                 // 走 ObjC 桥：设备抛 NSInvalidArgumentException 也不会把 App 带走
                 accepted = LCSetExposureTargetBias(device, clamped)
             }
