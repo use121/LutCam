@@ -17,18 +17,47 @@ enum PhotoWriter {
         }
     }
 
-    static func save(_ data: Data) async throws {
+    /// 保存一张照片；带 movieURL 时尝试保存为实况照片。
+    /// 实况配对失败会自动退回普通照片，不会白拍。
+    static func save(photoData: Data, movieURL: URL?) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             throw WriteError.denied
         }
 
+        let movie = validatedMovie(movieURL)
+
+        do {
+            try await perform(photoData: photoData, movieURL: movie)
+        } catch {
+            guard movie != nil else { throw error }
+            // 实况配对失败 → 退一步只存静态图
+            try await perform(photoData: photoData, movieURL: nil)
+        }
+    }
+
+    private static func perform(photoData: Data, movieURL: URL?) async throws {
         try await PHPhotoLibrary.shared().performChanges {
             let request = PHAssetCreationRequest.forAsset()
-            let options = PHAssetResourceCreationOptions()
-            options.uniformTypeIdentifier = detectUTI(data)
-            request.addResource(with: .photo, data: data, options: options)
+
+            let photoOptions = PHAssetResourceCreationOptions()
+            photoOptions.uniformTypeIdentifier = detectUTI(photoData)
+            request.addResource(with: .photo, data: photoData, options: photoOptions)
+
+            if let movieURL {
+                let videoOptions = PHAssetResourceCreationOptions()
+                videoOptions.uniformTypeIdentifier = UTType.quickTimeMovie.identifier
+                videoOptions.shouldMoveFile = false
+                request.addResource(with: .pairedVideo, fileURL: movieURL, options: videoOptions)
+            }
         }
+    }
+
+    private static func validatedMovie(_ url: URL?) -> URL? {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int, size > 1024 else { return nil }
+        return url
     }
 
     /// 按文件头判断真实格式，别信扩展名

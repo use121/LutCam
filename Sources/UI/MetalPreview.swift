@@ -3,8 +3,12 @@ import SwiftUI
 import UIKit
 
 /// 用 MTKView 直接画 CIImage，比 SwiftUI Image 逐帧转换快得多。
+///
+/// 支持画幅：按目标宽高比在画面里留黑边，取景框看到的构图就是拍出来的构图。
 struct MetalPreview: UIViewRepresentable {
     let controller: CameraController
+    /// 目标画幅，宽 / 高
+    let aspect: CGFloat
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView()
@@ -18,14 +22,18 @@ struct MetalPreview: UIViewRepresentable {
         view.isUserInteractionEnabled = false
 
         let renderer = PreviewRenderer(view: view)
+        renderer.setAspectRatio(aspect)
         context.coordinator.renderer = renderer
+
         controller.onFrame = { [weak renderer] image in
             renderer?.submit(image)
         }
         return view
     }
 
-    func updateUIView(_ uiView: MTKView, context: Context) {}
+    func updateUIView(_ uiView: MTKView, context: Context) {
+        context.coordinator.renderer?.setAspectRatio(aspect)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -41,6 +49,7 @@ final class PreviewRenderer {
     private let queue: MTLCommandQueue
     private let lock = NSLock()
     private var latest: CIImage?
+    private var aspectRatio: CGFloat = 3.0 / 4.0
     private weak var view: MTKView?
 
     init(view: MTKView) {
@@ -52,6 +61,12 @@ final class PreviewRenderer {
             .outputColorSpace: LUTCube.srgb,
             .cacheIntermediates: false
         ])
+    }
+
+    func setAspectRatio(_ ratio: CGFloat) {
+        lock.lock()
+        aspectRatio = ratio
+        lock.unlock()
     }
 
     func submit(_ image: CIImage) {
@@ -68,30 +83,47 @@ final class PreviewRenderer {
 
         lock.lock()
         let image = latest
+        let ratio = aspectRatio
         lock.unlock()
 
         guard let image else { return }
 
-        let target = CGRect(
-            x: 0, y: 0,
-            width: CGFloat(drawable.texture.width),
-            height: CGFloat(drawable.texture.height)
-        )
+        let width = CGFloat(drawable.texture.width)
+        let height = CGFloat(drawable.texture.height)
+        let full = CGRect(x: 0, y: 0, width: width, height: height)
 
-        // aspect-fill：等比放大到铺满，居中裁切
+        // 画幅目标区域（居中，尽量大）
+        var target = full
+        if ratio > 0 {
+            let fullRatio = width / height
+            if ratio < fullRatio {
+                let w = height * ratio
+                target = CGRect(x: (width - w) / 2, y: 0, width: w, height: height)
+            } else {
+                let h = width / ratio
+                target = CGRect(x: 0, y: (height - h) / 2, width: width, height: h)
+            }
+        }
+
+        // aspect-fill 到目标区域
         let scale = max(target.width / image.extent.width, target.height / image.extent.height)
         let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let offsetX = (target.width - scaled.extent.width) / 2
-        let offsetY = (target.height - scaled.extent.height) / 2
-        let centered = scaled.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
+        let positioned = scaled.transformed(by: CGAffineTransform(
+            translationX: target.midX - scaled.extent.midX,
+            y: target.midY - scaled.extent.midY
+        ))
+
+        // 铺在黑底上，目标区域之外就是黑边
+        let canvas = CIImage(color: .black).cropped(to: full)
+        let composited = positioned.composited(over: canvas)
 
         guard let buffer = queue.makeCommandBuffer() else { return }
 
         context.render(
-            centered,
+            composited,
             to: drawable.texture,
             commandBuffer: buffer,
-            bounds: target,
+            bounds: full,
             colorSpace: LUTCube.srgb
         )
 

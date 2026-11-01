@@ -4,6 +4,23 @@ import Foundation
 import Observation
 import UIKit
 
+/// 拍摄画幅。ratio 是「像素宽 / 像素高」，竖拍时小于 1。
+enum CaptureAspect: String, CaseIterable, Identifiable {
+    case fourThree = "4:3"
+    case sixteenNine = "16:9"
+    case square = "1:1"
+
+    var id: String { rawValue }
+
+    var ratio: CGFloat {
+        switch self {
+        case .fourThree: return 3.0 / 4.0
+        case .sixteenNine: return 9.0 / 16.0
+        case .square: return 1.0
+        }
+    }
+}
+
 struct LensPreset: Identifiable, Hashable {
     let base: CGFloat     // 等效焦段：0.5 / 1 / 3
     let label: String
@@ -31,6 +48,13 @@ final class CameraController: NSObject {
     var errorMessage: String?
     var lastCaptureInfo: String = "—"
 
+    /// 实况照片
+    var livePhotoEnabled = false
+    private(set) var liveSupported = false
+
+    /// 拍摄画幅
+    var aspect: CaptureAspect = .fourThree
+
     /// LUT 参数：预览与拍照都从这里取，保证一致
     var lutCube: LUTCube?
     var lutIntensity: Double = 1.0
@@ -51,7 +75,7 @@ final class CameraController: NSObject {
     @ObservationIgnored private let filterLock = NSLock()
     /// 设备是否接受了曝光补偿。不接受就用数字补偿兜底，滑条不至于变成摆设。
     @ObservationIgnored private var deviceAcceptsBias = false
-    @ObservationIgnored private var pendingCapture: PhotoCaptureDelegate?
+    @ObservationIgnored private var pendingCapture: LiveCaptureDelegate?
 
     @ObservationIgnored private var snapshot: CIImage?
     @ObservationIgnored private var lastSnapshotAt: TimeInterval = 0
@@ -69,6 +93,7 @@ final class CameraController: NSObject {
             guard let self else { return }
             if self.device == nil { self.configure(position: .back) }
             if !self.session.isRunning { self.session.startRunning() }
+            self.refreshLiveSupport()
             DispatchQueue.main.async { self.isRunning = self.session.isRunning }
         }
     }
@@ -128,6 +153,22 @@ final class CameraController: NSObject {
             }
         }
         return nil
+    }
+
+    /// isLivePhotoCaptureSupported 只有在会话真正跑起来之后才准确
+    private func refreshLiveSupport() {
+        let supported = photoOutput.isLivePhotoCaptureSupported
+
+        if supported && !photoOutput.isLivePhotoCaptureEnabled {
+            session.beginConfiguration()
+            photoOutput.isLivePhotoCaptureEnabled = true
+            session.commitConfiguration()
+        }
+
+        DispatchQueue.main.async {
+            if self.liveSupported != supported { self.liveSupported = supported }
+            if !supported && self.livePhotoEnabled { self.livePhotoEnabled = false }
+        }
     }
 
     private func applyConnections(for position: AVCaptureDevice.Position) {
@@ -382,19 +423,38 @@ final class CameraController: NSObject {
 
     // MARK: - 拍照
 
-    func capturePhoto() async throws -> Data {
+    struct CaptureOutput {
+        let photoData: Data
+        let movieURL: URL?
+    }
+
+    func capture(live: Bool) async throws -> CaptureOutput {
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .quality
+
+        var requestedMovie: URL?
+        let useLive = live && photoOutput.isLivePhotoCaptureEnabled
+        if useLive {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("live-\(UUID().uuidString).mov")
+            settings.livePhotoMovieFileURL = url
+            if photoOutput.availableLivePhotoVideoCodecTypes.contains(.hevc) {
+                settings.livePhotoVideoCodecType = .hevc
+            }
+            requestedMovie = url
+        }
+
         let cube = lutEnabled ? lutCube : nil
         let level = lutIntensity
+        let targetAspect = aspect
 
-        let raw: Data = try await withCheckedThrowingContinuation { cont in
+        let raw: CaptureOutput = try await withCheckedThrowingContinuation { cont in
             sessionQueue.async { [weak self] in
                 guard let self else {
                     cont.resume(throwing: PhotoProcessor.ProcessingError.noData)
                     return
                 }
-                let delegate = PhotoCaptureDelegate { [weak self] result in
+                let delegate = LiveCaptureDelegate(expectsMovie: useLive) { [weak self] result in
                     self?.pendingCapture = nil
                     cont.resume(with: result)
                 }
@@ -404,7 +464,15 @@ final class CameraController: NSObject {
         }
 
         let digitalEV = deviceAcceptsBias ? 0 : exposureBias
-        return PhotoProcessor.apply(cube: cube, intensity: level, digitalEV: digitalEV, to: raw)
+        let processed = PhotoProcessor.apply(
+            cube: cube,
+            intensity: level,
+            digitalEV: digitalEV,
+            aspect: targetAspect,
+            to: raw.photoData
+        )
+
+        return CaptureOutput(photoData: processed, movieURL: raw.movieURL ?? requestedMovie)
     }
 
     /// 供缩略图使用的取景快照（未套 LUT），限频
@@ -451,26 +519,56 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
 
 // MARK: - 拍照代理
 
-private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let completion: (Result<Data, Error>) -> Void
+private final class LiveCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let expectsMovie: Bool
+    private let completion: (Result<CameraController.CaptureOutput, Error>) -> Void
+
+    private var photoData: Data?
+    private var movieURL: URL?
+    private var photoDone = false
+    private var movieDone = false
     private var finished = false
 
-    init(completion: @escaping (Result<Data, Error>) -> Void) {
+    init(expectsMovie: Bool, completion: @escaping (Result<CameraController.CaptureOutput, Error>) -> Void) {
+        self.expectsMovie = expectsMovie
         self.completion = completion
     }
 
-    private func finish(_ result: Result<Data, Error>) {
+    private func finish(_ result: Result<CameraController.CaptureOutput, Error>) {
         guard !finished else { return }
         finished = true
         completion(result)
     }
 
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error { finish(.failure(error)); return }
-        guard let data = photo.fileDataRepresentation() else {
+    private func tryFinish() {
+        guard photoDone else { return }
+        if expectsMovie && !movieDone { return }
+        guard let photoData else {
             finish(.failure(PhotoProcessor.ProcessingError.noData))
             return
         }
-        finish(.success(data))
+        finish(.success(CameraController.CaptureOutput(photoData: photoData, movieURL: movieURL)))
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        if let error { finish(.failure(error)); return }
+        photoData = photo.fileDataRepresentation()
+        photoDone = true
+        tryFinish()
+    }
+
+    // outputFileURL 必须是非可选 URL，写成 URL? 会与协议不匹配
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingLivePhotoToMovieFileAt outputFileURL: URL,
+        duration: CMTime,
+        photoDisplayTime: CMTime,
+        resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?
+    ) {
+        if let error { finish(.failure(error)); return }
+        movieURL = outputFileURL
+        movieDone = true
+        tryFinish()
     }
 }

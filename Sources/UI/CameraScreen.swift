@@ -37,7 +37,7 @@ struct CameraScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                MetalPreview(controller: controller)
+                MetalPreview(controller: controller, aspect: controller.aspect.ratio)
                     .ignoresSafeArea()
 
                 // 手势层：在预览之上、控件之下
@@ -126,6 +126,36 @@ struct CameraScreen: View {
             .id("lutchip-\(library.selectedID ?? "none")-\(library.isEnabled)")
 
             Spacer()
+
+            Button {
+                cycleAspect()
+            } label: {
+                Text(controller.aspect.rawValue)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(controller.livePhotoEnabled ? Color.white.opacity(0.35) : Color.primary)
+                    .frame(width: 46, height: 40)
+                    .id("aspect-label-\(controller.aspect.rawValue)")
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .disabled(controller.livePhotoEnabled)
+
+            Button {
+                controller.livePhotoEnabled.toggle()
+                // 实况的静态图与视频必须同尺寸，画幅只能固定 4:3
+                if controller.livePhotoEnabled { controller.aspect = .fourThree }
+            } label: {
+                Image(systemName: controller.livePhotoEnabled ? "livephoto" : "livephoto.slash")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(controller.livePhotoEnabled ? Color.yellow : Color.primary)
+                    .frame(width: 40, height: 40)
+                    .id("live-icon-\(controller.livePhotoEnabled)")
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .tint(controller.livePhotoEnabled ? Color.yellow : Color.clear)
+            .disabled(!controller.liveSupported)
+            .opacity(controller.liveSupported ? 1 : 0.4)
 
             Button {
                 chromeCollapsed.toggle()
@@ -431,6 +461,15 @@ struct CameraScreen: View {
         }
     }
 
+    private func cycleAspect() {
+        let all = CaptureAspect.allCases
+        guard let index = all.firstIndex(of: controller.aspect) else {
+            controller.aspect = .fourThree
+            return
+        }
+        controller.aspect = all[(index + 1) % all.count]
+    }
+
     private func capture() {
         guard !isCapturing else { return }
         isCapturing = true
@@ -440,10 +479,12 @@ struct CameraScreen: View {
             var info: String
 
             do {
-                let data = try await controller.capturePhoto()
-                try await PhotoWriter.save(data)
-                message = "已保存到相册"
-                info = "成功 · \(max(1, data.count / 1024)) KB"
+                let output = try await controller.capture(live: controller.livePhotoEnabled)
+                try await PhotoWriter.save(photoData: output.photoData, movieURL: output.movieURL)
+
+                let kind = output.movieURL != nil ? "实况照片" : "照片"
+                message = "已保存\(kind)"
+                info = "成功 · \(kind) · \(max(1, output.photoData.count / 1024)) KB"
             } catch {
                 message = "保存失败：\(error.localizedDescription)"
                 info = message
