@@ -113,9 +113,14 @@ final class PreviewRenderer {
             y: target.midY - scaled.extent.midY
         ))
 
+        // 关键：必须先裁到目标区域，再铺到黑底上。
+        // aspect-fill 会让画面在某个方向上溢出目标框（比如 1:1 时高度超出），
+        // 不裁的话溢出的部分会把黑边盖掉 —— 表现就是「1:1 和 4:3 看起来一样大」。
+        let clipped = positioned.cropped(to: target)
+
         // 铺在黑底上，目标区域之外就是黑边
         let canvas = CIImage(color: .black).cropped(to: full)
-        let composited = positioned.composited(over: canvas)
+        let composited = clipped.composited(over: canvas)
 
         guard let buffer = queue.makeCommandBuffer() else { return }
 

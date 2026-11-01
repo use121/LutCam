@@ -405,26 +405,43 @@ struct CameraScreen: View {
     }
 
     /// 屏幕点 → 设备坐标。视频旋转 90°，设备 (0,0) 落在竖屏画面右上角。
+    ///
+    /// 要先算出取景框在屏幕上的位置（画幅会留黑边），再算源画面在取景框里被裁掉多少，
+    /// 否则切到 16:9 / 1:1 之后对焦点会偏。
     private func devicePoint(from location: CGPoint, in size: CGSize) -> CGPoint {
-        let aspect = controller.frameAspect
-        guard size.width > 0, size.height > 0, aspect > 0 else {
+        let sourceAspect = controller.frameAspect   // 源画面宽 / 高（竖屏）
+        let frameAspect = controller.aspect.ratio   // 取景框目标宽 / 高
+
+        guard size.width > 0, size.height > 0, sourceAspect > 0, frameAspect > 0 else {
             return CGPoint(x: 0.5, y: 0.5)
         }
 
+        // 取景框：居中，尽量大
         let viewAspect = size.width / size.height
+        var frame = CGRect(origin: .zero, size: size)
+        if frameAspect < viewAspect {
+            let w = size.height * frameAspect
+            frame = CGRect(x: (size.width - w) / 2, y: 0, width: w, height: size.height)
+        } else {
+            let h = size.width / frameAspect
+            frame = CGRect(x: 0, y: (size.height - h) / 2, width: size.width, height: h)
+        }
+
+        // 取景框内的归一化坐标
+        let fu = (location.x - frame.minX) / max(frame.width, 1)
+        let fv = (location.y - frame.minY) / max(frame.height, 1)
+
+        // 源画面按 aspect-fill 铺满取景框，反推被裁掉的部分
         var u: CGFloat
         var v: CGFloat
-
-        if aspect > viewAspect {
-            let displayedWidth = size.height * aspect
-            let offsetX = (size.width - displayedWidth) / 2
-            u = (location.x - offsetX) / displayedWidth
-            v = location.y / size.height
+        if sourceAspect > frameAspect {
+            let visible = frameAspect / sourceAspect
+            u = 0.5 + (fu - 0.5) * visible
+            v = fv
         } else {
-            let displayedHeight = size.width / aspect
-            let offsetY = (size.height - displayedHeight) / 2
-            u = location.x / size.width
-            v = (location.y - offsetY) / displayedHeight
+            let visible = sourceAspect / frameAspect
+            u = fu
+            v = 0.5 + (fv - 0.5) * visible
         }
 
         u = min(max(u, 0), 1)
