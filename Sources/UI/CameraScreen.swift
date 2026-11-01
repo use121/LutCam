@@ -19,14 +19,18 @@ struct CameraScreen: View {
 
     private var minZoom: CGFloat { controller.lenses.first?.base ?? 1 }
 
-    private var safeTop: CGFloat {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .windows.first?.safeAreaInsets.top ?? 0
+    /// 优先取 keyWindow。`windows.first` 可能拿到零 insets 的辅助窗口，
+    /// 会导致首帧布局错位、点击区域和视觉对不上。
+    private var keyWindow: UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes {
+            if let window = scene.windows.first(where: { $0.isKeyWindow }) { return window }
+        }
+        return scenes.first?.windows.first
     }
-    private var safeBottom: CGFloat {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .windows.first?.safeAreaInsets.bottom ?? 0
-    }
+
+    private var safeTop: CGFloat { keyWindow?.safeAreaInsets.top ?? 0 }
+    private var safeBottom: CGFloat { keyWindow?.safeAreaInsets.bottom ?? 0 }
 
     var body: some View {
         GeometryReader { geo in
@@ -87,9 +91,6 @@ struct CameraScreen: View {
                     .padding(.bottom, 4)
             }
 
-            collapseToggle
-                .padding(.vertical, 6)
-
             shutterRow
                 .padding(.horizontal, 26)
                 .padding(.top, 2)
@@ -125,6 +126,20 @@ struct CameraScreen: View {
             .id("lutchip-\(library.selectedID ?? "none")-\(library.isEnabled)")
 
             Spacer()
+
+            Button {
+                chromeCollapsed.toggle()
+            } label: {
+                Image(systemName: chromeCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(chromeCollapsed ? Color.yellow : Color.primary)
+                    .frame(width: 40, height: 40)
+                    // id 只挂图标：图标会跟着刷新，但按钮身份不变，点击不会被吞
+                    .id("collapse-icon-\(chromeCollapsed)")
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .tint(chromeCollapsed ? Color.yellow : Color.clear)
 
             Button {
                 showSettings = true
@@ -239,31 +254,6 @@ struct CameraScreen: View {
         let high = min(deviceHigh.isFinite ? deviceHigh : 2, 2)
         guard high - low > 0.2 else { return -2...2 }
         return low...high
-    }
-
-    /// 收起 / 展开底部选项（原图、滤镜条、镜头档位）
-    ///
-    /// 注意：必须用官方 `.buttonStyle(.glass)`。
-    /// 手动给 Button 贴 `.glassEffect` 会吞掉点击，表现为「点很多次没反应」。
-    private var collapseToggle: some View {
-        Button {
-            // 不要包 withAnimation，也不要在按钮上加 .id：
-            // 两者都会在点击过程中改变视图身份，导致松手时的 action 被吞掉
-            // （表现就是「按下有弹跳、但没有功能」）。
-            chromeCollapsed.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: chromeCollapsed ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11, weight: .bold))
-                Text(chromeCollapsed ? "展开选项" : "收起选项")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-            }
-            .foregroundStyle(.white.opacity(0.85))
-            .frame(width: 104, height: 36)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
     }
 
     private var shutterRow: some View {
