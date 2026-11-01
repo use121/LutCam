@@ -34,6 +34,10 @@ final class LUTLibrary {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         folder = docs.appendingPathComponent("LUTs", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        // 内置胶片预设：首次启动装进来，之后和用户导入的一样对待
+        PresetInstaller.installIfNeeded(into: folder)
+
         selectedID = UserDefaults.standard.string(forKey: Self.selectedKey)
         refresh()
     }
@@ -118,6 +122,19 @@ final class LUTLibrary {
             lastImportInfo = "失败：\(error.localizedDescription)"
             return false
         }
+    }
+
+    /// 把删掉的内置预设补回来
+    @discardableResult
+    func restorePresets() -> Int {
+        let count = PresetInstaller.restore(into: folder)
+        cacheLock.lock()
+        cache.removeAll()
+        cacheLock.unlock()
+        thumbs.removeAll()
+        refresh()
+        lastImportInfo = count > 0 ? "已恢复 \(count) 个内置预设" : "内置预设都在，没有需要恢复的"
+        return count
     }
 
     // MARK: - 选择

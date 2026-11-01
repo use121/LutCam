@@ -85,10 +85,16 @@ struct SettingsScreen: View {
             } label: {
                 Label("导入 .cube 文件", systemImage: "square.and.arrow.down")
             }
+
+            Button {
+                library.restorePresets()
+            } label: {
+                Label("恢复内置预设", systemImage: "arrow.counterclockwise")
+            }
         } header: {
             Text("LUT")
         } footer: {
-            Text("把 .cube 存到「文件」App 再从这里导入。3D 和 1D 都支持，1D 会自动转成 3D。")
+            Text("内置了 13 个胶片预设（理光正片、富士、柯达、港风、青橙等），首次启动自动装好，删了可以点「恢复内置预设」找回。也支持自己导入 .cube，3D 和 1D 都行。")
         }
     }
 

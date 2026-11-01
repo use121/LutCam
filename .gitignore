@@ -6,3 +6,6 @@ _inspect/
 _log/
 .DS_Store
 *.xcodeproj
+
+# 预设对比图
+_presets_sheet.png
