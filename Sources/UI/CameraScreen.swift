@@ -10,7 +10,7 @@ struct CameraScreen: View {
     @State private var isCapturing = false
     @State private var toast: String?
 
-    @AppStorage("ui.chromeCollapsed") private var chromeCollapsed = false
+    @State private var chromeCollapsed = false
 
     @State private var reticle: CGPoint?
     @State private var showExposure = false
@@ -95,6 +95,7 @@ struct CameraScreen: View {
                 .padding(.top, 2)
                 .padding(.bottom, safeBottom + 10)
         }
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: chromeCollapsed)
     }
 
     private var topBar: some View {
@@ -246,9 +247,10 @@ struct CameraScreen: View {
     /// 手动给 Button 贴 `.glassEffect` 会吞掉点击，表现为「点很多次没反应」。
     private var collapseToggle: some View {
         Button {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
-                chromeCollapsed.toggle()
-            }
+            // 不要包 withAnimation，也不要在按钮上加 .id：
+            // 两者都会在点击过程中改变视图身份，导致松手时的 action 被吞掉
+            // （表现就是「按下有弹跳、但没有功能」）。
+            chromeCollapsed.toggle()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: chromeCollapsed ? "chevron.up" : "chevron.down")
@@ -262,7 +264,6 @@ struct CameraScreen: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
-        .id("collapse-\(chromeCollapsed)")
     }
 
     private var shutterRow: some View {
