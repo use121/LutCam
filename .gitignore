@@ -1,0 +1,8 @@
+# 产物
+*.ipa
+Payload/
+build/
+_inspect/
+_log/
+.DS_Store
+*.xcodeproj
