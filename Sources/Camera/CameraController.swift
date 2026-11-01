@@ -47,8 +47,10 @@ final class CameraController: NSObject {
     @ObservationIgnored private var device: AVCaptureDevice?
     @ObservationIgnored private var input: AVCaptureDeviceInput?
     @ObservationIgnored private var zoomBase: CGFloat = 1
-    @ObservationIgnored private var previewFilter: CIFilter?
+    @ObservationIgnored private var previewFilters: [CIFilter] = []
     @ObservationIgnored private let filterLock = NSLock()
+    /// 设备是否接受了曝光补偿。不接受就用数字补偿兜底，滑条不至于变成摆设。
+    @ObservationIgnored private var deviceAcceptsBias = false
     @ObservationIgnored private var pendingCapture: PhotoCaptureDelegate?
 
     @ObservationIgnored private var snapshot: CIImage?
@@ -322,12 +324,28 @@ final class CameraController: NSObject {
     }
 
     func setExposureBias(_ value: Float) {
+        guard value.isFinite else { return }
+
+        DispatchQueue.main.async {
+            if abs(self.exposureBias - value) > 0.01 { self.exposureBias = value }
+        }
+
         sessionQueue.async { [weak self] in
             guard let self, let device = self.device else { return }
-            let clamped = min(max(value, device.minExposureTargetBias), device.maxExposureTargetBias)
-            device.setExposureTargetBias(clamped, completionHandler: nil)
+
+            let low = device.minExposureTargetBias
+            let high = device.maxExposureTargetBias
+
+            var accepted = false
+            if low.isFinite, high.isFinite, high - low > 0.1 {
+                let clamped = min(max(value, low), high)
+                // 走 ObjC 桥：设备抛 NSInvalidArgumentException 也不会把 App 带走
+                accepted = LCSetExposureTargetBias(device, clamped)
+            }
+
             DispatchQueue.main.async {
-                if abs(self.exposureBias - clamped) > 0.01 { self.exposureBias = clamped }
+                self.deviceAcceptsBias = accepted
+                self.refreshPipeline()
             }
         }
     }
@@ -335,22 +353,29 @@ final class CameraController: NSObject {
     // MARK: - LUT
 
     /// LUT 参数变了就调一次，重建预览滤镜
-    func refreshPreviewFilter() {
-        let built: CIFilter?
-        if lutEnabled, let cube = lutCube {
-            built = cube.filter(intensity: lutIntensity)
-        } else {
-            built = nil
+    /// LUT 或曝光补偿变化时重建预览滤镜链
+    func refreshPipeline() {
+        var chain: [CIFilter] = []
+
+        let ev = deviceAcceptsBias ? 0 : exposureBias
+        if abs(ev) > 0.02, let exposure = CIFilter(name: "CIExposureAdjust") {
+            exposure.setValue(NSNumber(value: ev), forKey: kCIInputEVKey)
+            chain.append(exposure)
         }
+
+        if lutEnabled, let cube = lutCube, let lut = cube.filter(intensity: lutIntensity) {
+            chain.append(lut)
+        }
+
         filterLock.lock()
-        previewFilter = built
+        previewFilters = chain
         filterLock.unlock()
     }
 
-    private func currentPreviewFilter() -> CIFilter? {
+    private func currentPreviewFilters() -> [CIFilter] {
         filterLock.lock()
         defer { filterLock.unlock() }
-        return previewFilter
+        return previewFilters
     }
 
     // MARK: - 拍照
@@ -376,7 +401,8 @@ final class CameraController: NSObject {
             }
         }
 
-        return PhotoProcessor.apply(cube: cube, intensity: level, to: raw)
+        let digitalEV = deviceAcceptsBias ? 0 : exposureBias
+        return PhotoProcessor.apply(cube: cube, intensity: level, digitalEV: digitalEV, to: raw)
     }
 
     /// 供缩略图使用的取景快照（未套 LUT），限频
@@ -412,7 +438,7 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
             snapshot = image
         }
 
-        if let filter = currentPreviewFilter() {
+        for filter in currentPreviewFilters() {
             filter.setValue(image, forKey: kCIInputImageKey)
             if let out = filter.outputImage { image = out }
         }

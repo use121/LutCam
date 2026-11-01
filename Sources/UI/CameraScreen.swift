@@ -409,7 +409,7 @@ struct CameraScreen: View {
         controller.lutCube = library.selectedCube
         controller.lutIntensity = library.intensity
         controller.lutEnabled = library.isEnabled
-        controller.refreshPreviewFilter()
+        controller.refreshPipeline()
     }
 
     private func requestCamera() {
