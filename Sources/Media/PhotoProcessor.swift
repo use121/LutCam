@@ -64,7 +64,8 @@ enum PhotoProcessor {
 
         guard let cgImage = RenderPipeline.cgImage(from: image) else { return data }
 
-        properties[kCGImageDestinationLossyCompressionQuality] = 0.94
+        // 0.88 相比 0.94 肉眼几乎无差别，但文件能小两三成
+        properties[kCGImageDestinationLossyCompressionQuality] = 0.88
         properties.removeValue(forKey: kCGImagePropertyPixelWidth)
         properties.removeValue(forKey: kCGImagePropertyPixelHeight)
 

@@ -429,11 +429,14 @@ final class CameraController: NSObject {
     }
 
     func capture(live: Bool) async throws -> CaptureOutput {
+        let useLive = live && photoOutput.isLivePhotoCaptureEnabled
+
         let settings = AVCapturePhotoSettings()
-        settings.photoQualityPrioritization = .quality
+        // 实况以那段视频为主，静态图用 balanced 足够，
+        // 还能缩短拍摄等待时间、顺带省空间。
+        settings.photoQualityPrioritization = useLive ? .balanced : .quality
 
         var requestedMovie: URL?
-        let useLive = live && photoOutput.isLivePhotoCaptureEnabled
         if useLive {
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("live-\(UUID().uuidString).mov")

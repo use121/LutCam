@@ -483,8 +483,10 @@ struct CameraScreen: View {
                 try await PhotoWriter.save(photoData: output.photoData, movieURL: output.movieURL)
 
                 let kind = output.movieURL != nil ? "实况照片" : "照片"
-                message = "已保存\(kind)"
-                info = "成功 · \(kind) · \(max(1, output.photoData.count / 1024)) KB"
+                let kb = max(1, output.photoData.count / 1024)
+                // 顺手把体积显示出来，方便对比压缩效果
+                message = "已保存\(kind) · \(kb) KB"
+                info = "成功 · \(kind) · \(kb) KB"
             } catch {
                 message = "保存失败：\(error.localizedDescription)"
                 info = message
