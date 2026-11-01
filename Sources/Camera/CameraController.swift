@@ -156,7 +156,13 @@ final class CameraController: NSObject {
             dev.unlockForConfiguration()
         }
 
-        let range = dev.minExposureTargetBias...dev.maxExposureTargetBias
+        // 设备可能返回退化的范围（min == max 或非有限值）。
+        // 直接拿去构造 ClosedRange 会让 Slider 内部算出 NaN，SwiftUI 布局时崩溃。
+        let biasLow = dev.minExposureTargetBias
+        let biasHigh = dev.maxExposureTargetBias
+        let range: ClosedRange<Float> = (biasHigh - biasLow) > 0.2 && biasHigh.isFinite && biasLow.isFinite
+            ? biasLow...biasHigh
+            : (-2)...2
 
         DispatchQueue.main.async {
             self.zoomBase = base

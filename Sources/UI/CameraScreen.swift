@@ -10,6 +10,8 @@ struct CameraScreen: View {
     @State private var isCapturing = false
     @State private var toast: String?
 
+    @AppStorage("ui.chromeCollapsed") private var chromeCollapsed = false
+
     @State private var reticle: CGPoint?
     @State private var showExposure = false
     @State private var pinchBase: CGFloat = 1
@@ -74,17 +76,23 @@ struct CameraScreen: View {
             Spacer(minLength: 0)
 
             exposureControl
-            intensityControl
 
-            LUTStrip(library: library, snapshot: { controller.currentSnapshot() })
-                .padding(.bottom, 4)
+            if !chromeCollapsed {
+                intensityControl
 
-            lensBar
-                .padding(.bottom, 6)
+                LUTStrip(library: library, snapshot: { controller.currentSnapshot() })
+                    .padding(.bottom, 4)
+
+                lensBar
+                    .padding(.bottom, 4)
+            }
+
+            collapseToggle
+                .padding(.vertical, 6)
 
             shutterRow
                 .padding(.horizontal, 26)
-                .padding(.top, 6)
+                .padding(.top, 2)
                 .padding(.bottom, safeBottom + 10)
         }
     }
@@ -140,10 +148,13 @@ struct CameraScreen: View {
 
                 Slider(
                     value: Binding(
-                        get: { Double(controller.exposureBias) },
+                        get: {
+                            let range = safeExposureRange
+                            return min(max(Double(controller.exposureBias), range.lowerBound), range.upperBound)
+                        },
                         set: { controller.setExposureBias(Float($0)) }
                     ),
-                    in: Double(controller.exposureRange.lowerBound)...Double(controller.exposureRange.upperBound)
+                    in: safeExposureRange
                 )
                 .tint(.yellow)
                 .frame(width: 150)
@@ -214,6 +225,35 @@ struct CameraScreen: View {
                 }
             }
         }
+    }
+
+    /// 设备给的范围可能退化（min == max 或非有限），直接喂给 Slider 会算出 NaN 导致崩溃
+    private var safeExposureRange: ClosedRange<Double> {
+        let low = Double(controller.exposureRange.lowerBound)
+        let high = Double(controller.exposureRange.upperBound)
+        guard low.isFinite, high.isFinite, high - low > 0.2 else { return -2...2 }
+        return low...high
+    }
+
+    /// 收起 / 展开底部选项（原图、滤镜条、镜头档位）
+    private var collapseToggle: some View {
+        Button {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                chromeCollapsed.toggle()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: chromeCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                Text(chromeCollapsed ? "展开" : "收起")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+            }
+            .foregroundStyle(.white.opacity(0.7))
+            .frame(width: 54, height: 24)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: .capsule)
+        .id("collapse-\(chromeCollapsed)")
     }
 
     private var shutterRow: some View {
